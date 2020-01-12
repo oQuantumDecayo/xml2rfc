@@ -2,7 +2,7 @@
     Augment section links to RFCs and Internet Drafts, also cleanup 
     unneeded markup from kramdown2629
 
-    Copyright (c) 2017, Julian Reschke (julian.reschke@greenbytes.de)
+    Copyright (c) 2017-2019, Julian Reschke (julian.reschke@greenbytes.de)
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
@@ -35,7 +35,8 @@
                xmlns:x="http://purl.org/net/xml2rfc/ext"
 >
 
-<xsl:output method="xml" version="1.0" encoding="UTF-8" indent="no" doctype-system=""/>
+<xsl:strip-space elements="abstract aside author address back dl front list middle note ol postal references reference rfc section table tbody thead tr ul"/>
+<xsl:output method="xml" version="1.0" encoding="UTF-8" indent="yes" doctype-system=""/>
 
 <!-- white-space separated list of specs which should be linked directly to -->
 <xsl:param name="sibling-specs"/>
@@ -49,7 +50,7 @@
   </xsl:variable>
   <xsl:variable name="t2">
     <xsl:for-each select="$t1">
-      <xsl:apply-templates mode="strip-refs"/>
+      <xsl:apply-templates mode="strip-and-annotate-refs"/>
     </xsl:for-each>
   </xsl:variable>
   <xsl:variable name="t3">
@@ -62,8 +63,13 @@
       <xsl:apply-templates mode="link-sibling-specs"/>
     </xsl:for-each>
   </xsl:variable>
-  <xsl:for-each select="$t4">
-    <xsl:apply-templates mode="insert-feedback"/>
+  <xsl:variable name="t5">
+    <xsl:for-each select="$t4">
+      <xsl:apply-templates mode="insert-feedback"/>
+    </xsl:for-each>
+  </xsl:variable>
+  <xsl:for-each select="$t5">
+    <xsl:apply-templates mode="insert-prettyprint"/>
   </xsl:for-each>
 </xsl:template>
 
@@ -81,14 +87,47 @@
   <xsl:copy><xsl:apply-templates select="node()|@*" mode="insert-refs"/></xsl:copy>
 </xsl:template>
 
+<xsl:template name="get-section-number">
+  <xsl:choose>
+    <xsl:when test="self::section and parent::back"><xsl:number count="section" format="a"/></xsl:when>
+    <xsl:when test="self::section and parent::middle"><xsl:number count="section"/></xsl:when>
+    <xsl:when test="self::section"><xsl:for-each select=".."><xsl:call-template name="get-section-number"/></xsl:for-each>.<xsl:number count="section"/></xsl:when>
+    <xsl:otherwise/>
+  </xsl:choose>
+</xsl:template>
+
+<xsl:template name="insert-target-metadata">
+  <xsl:param name="file"/>
+  <xsl:param name="sec"/>
+  <xsl:if test="contains(concat(' ',$sibling-specs,' '),concat(' ',$file,' '))">
+    <xsl:variable name="src" select="document(concat($file,'.xml'))"/>
+    <xsl:if test="$src/rfc">
+      <!-- find target section -->
+      <xsl:for-each select="$src/rfc//section">
+        <xsl:variable name="n">
+          <xsl:call-template name="get-section-number"/>
+        </xsl:variable>
+        <xsl:if test="$n=$sec">
+          <xsl:if test="@anchor">
+            <xsl:processing-instruction name="aug-anchor"><xsl:value-of select="@anchor"/></xsl:processing-instruction>
+          </xsl:if>
+          <xsl:processing-instruction name="aug-title"><xsl:value-of select="@title"/></xsl:processing-instruction>
+        </xsl:if>
+      </xsl:for-each>
+    </xsl:if>
+  </xsl:if>
+</xsl:template>
+
 <xsl:template match="text()" mode="insert-refs">
   <xsl:variable name="ts" select="following-sibling::*[1]"/>
   <xsl:variable name="s" select="$ts[self::xref and not(text()) and (not(@format) or @format='default') and //reference[@anchor=$ts/@target]]"/>
   <xsl:variable name="tp" select="preceding-sibling::*[1]"/>
   <xsl:variable name="p" select="$tp[self::xref and not(text()) and (not(@format) or @format='default') and //reference[@anchor=$tp/@target]]"/>
-  <xsl:variable name="secnum">([0-9A-Z](\.[0-9A-Z])*)</xsl:variable>
-  <xsl:variable name="sp">(.*)(Section|Appendix)\s+(<xsl:value-of select="$secnum"/>*)\s+of\s*$</xsl:variable>
-  <xsl:variable name="pp">^,\s+(Section|Appendix)\s+(<xsl:value-of select="$secnum"/>*)(.*)</xsl:variable>
+  <xsl:variable name="secnum">([0-9A-Z]+(\.[0-9A-Z]+)*)</xsl:variable>
+  <xsl:variable name="sp">(.*)(Section|Appendix)\s+<xsl:value-of select="$secnum"/>\s+of\s*$</xsl:variable>
+  <xsl:variable name="sp2">((.*)(Sections|Appendices|Section|Appendix)\s+)<xsl:value-of select="$secnum"/>\s+and\s+(<xsl:value-of select="$secnum"/>*)\s+of\s*$</xsl:variable>
+  <xsl:variable name="pp">^,\s+(Section|Appendix)\s+<xsl:value-of select="$secnum"/>(.*)</xsl:variable>
+  <xsl:variable name="pp2">^(,\s+(Sections|Appendices|Section|Appendix)\s+)<xsl:value-of select="$secnum"/>\s+and\s+<xsl:value-of select="$secnum"/>(.*)</xsl:variable>
   <xsl:variable name="bad1">^\s+(Section|Appendix)\s+(<xsl:value-of select="$secnum"/>*)(.*)</xsl:variable>
   <xsl:variable name="bad2">^;\s+(Section|Appendix)\s+(<xsl:value-of select="$secnum"/>*)(.*)</xsl:variable>
   <xsl:choose>
@@ -103,11 +142,41 @@
         </xsl:otherwise>
       </xsl:choose>
     </xsl:when>
+    <xsl:when test="$s and matches(., $sp2,'s')">
+      <xsl:variable name="reftarget" select="//reference[@anchor=$s/@target]"/>
+      <xsl:choose>
+        <xsl:when test="$reftarget and $reftarget[seriesInfo/@name='RFC' or seriesInfo/@name='Internet-Draft']">
+          <xsl:value-of select="replace(., $sp2, '$1', 's')"/>
+          <xref target="{$s/@target}" x:fmt="number" x:sec="{replace(., $sp2, '$4', 's')}"/>
+          <xsl:text> and </xsl:text>
+          <xref target="{$s/@target}" x:fmt="number" x:sec="{replace(., $sp2, '$6', 's')}"/>
+          <xsl:text> of </xsl:text>
+        </xsl:when>
+        <xsl:otherwise>
+          <xsl:copy-of select="."/>
+        </xsl:otherwise>
+      </xsl:choose>
+    </xsl:when>
+    <xsl:when test="$p and matches(., $pp2,'s')">
+      <xsl:variable name="reftarget" select="//reference[@anchor=$p/@target]"/>
+      <xsl:choose>
+        <xsl:when test="$reftarget and $reftarget[seriesInfo/@name='RFC' or seriesInfo/@name='Internet-Draft']">
+          <xsl:value-of select="replace(., $pp2, '$1', 's')"/>
+          <xref target="{$p/@target}" x:fmt="number" x:sec="{replace(., $pp2, '$3', 's')}"/>
+          <xsl:text> and </xsl:text>
+          <xref target="{$p/@target}" x:fmt="number" x:sec="{replace(., $pp2, '$5', 's')}"/>
+          <xsl:value-of select="replace(., $pp2, '$7', 's')"/>
+        </xsl:when>
+        <xsl:otherwise>
+          <xsl:copy-of select="."/>
+        </xsl:otherwise>
+      </xsl:choose>
+    </xsl:when>
     <xsl:when test="$p and matches(., $pp,'s')">
       <xsl:variable name="reftarget" select="//reference[@anchor=$p/@target]"/>
       <xsl:choose>
         <xsl:when test="$reftarget and $reftarget[seriesInfo/@name='RFC' or seriesInfo/@name='Internet-Draft']">
-          <xref INSERT="preceding" target="{$p/@target}" x:fmt="," x:sec="{replace(., $pp, '$2', 's')}"/><xsl:value-of select="replace(., $pp, '$5', 's')"/>
+          <xref INSERT="preceding" target="{$p/@target}" x:fmt="," x:sec="{replace(., $pp, '$2', 's')}"/><xsl:value-of select="replace(., $pp, '$4', 's')"/>
         </xsl:when>
         <xsl:otherwise>
           <xsl:copy-of select="."/>
@@ -144,11 +213,11 @@
   </xsl:choose>
 </xsl:template>
 
-<xsl:template match="*|@*|comment()|processing-instruction()" mode="strip-refs">
-  <xsl:copy><xsl:apply-templates select="node()|@*" mode="strip-refs"/></xsl:copy>
+<xsl:template match="*|@*|comment()|processing-instruction()" mode="strip-and-annotate-refs">
+  <xsl:copy><xsl:apply-templates select="node()|@*" mode="strip-and-annotate-refs"/></xsl:copy>
 </xsl:template>
 
-<xsl:template match="xref[not(node())]" mode="strip-refs">
+<xsl:template match="xref[not(node())]" mode="strip-and-annotate-refs">
   <xsl:variable name="fx" select="following-sibling::*[1]"/>
   <xsl:variable name="f" select="$fx[self::xref and @INSERT='preceding']"/>
   <xsl:variable name="px" select="preceding-sibling::*[1]"/>
@@ -156,12 +225,22 @@
   <xsl:choose>
     <xsl:when test="$f or $p"/>
     <xsl:otherwise>
-      <xsl:copy><xsl:apply-templates select="node()|@*" mode="strip-refs"/></xsl:copy>
+      <xsl:copy>
+        <xsl:apply-templates select="@*" mode="strip-and-annotate-refs"/>
+        <xsl:variable name="reftarget" select="//reference[@anchor=current()/@target]"/>
+        <xsl:if test="@x:sec">
+          <xsl:call-template name="insert-target-metadata">
+            <xsl:with-param name="file" select="$reftarget/seriesInfo[@name='RFC' or @name='Internet-Draft']/@value"/>
+            <xsl:with-param name="sec" select="@x:sec"/>
+          </xsl:call-template>
+        </xsl:if>
+        <xsl:apply-templates select="node()" mode="strip-and-annotate-refs"/>
+      </xsl:copy>
     </xsl:otherwise>
   </xsl:choose>
 </xsl:template>
 
-<xsl:template match="xref/@INSERT" mode="strip-refs"/>
+<xsl:template match="xref/@INSERT" mode="strip-and-annotate-refs"/>
 
 <xsl:template match="*|@*|comment()|processing-instruction()" mode="remove-kramdownleftovers">
   <xsl:copy><xsl:apply-templates select="node()|@*" mode="remove-kramdownleftovers"/></xsl:copy>
@@ -231,6 +310,16 @@
     </xsl:if>
     <xsl:apply-templates select="node()" mode="insert-feedback"/>
   </xsl:copy>
+</xsl:template>
+
+<xsl:template match="*|@*|comment()|processing-instruction()" mode="insert-prettyprint">
+  <xsl:copy><xsl:apply-templates select="node()|@*" mode="insert-prettyprint"/></xsl:copy>
+</xsl:template>
+
+<xsl:template match="rfc" mode="insert-prettyprint">
+  <xsl:processing-instruction name="rfc-ext">html-pretty-print="prettyprint https://cdn.rawgit.com/google/code-prettify/master/loader/run_prettify.js"</xsl:processing-instruction>
+  <xsl:text>&#10;</xsl:text>
+  <xsl:copy-of select="."/>
 </xsl:template>
 
 </xsl:transform>

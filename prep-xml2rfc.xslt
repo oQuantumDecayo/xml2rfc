@@ -1,7 +1,7 @@
 <!--
     Experimental implementation of xml2rfc v3 preptool
 
-    Copyright (c) 2016-2017, Julian Reschke (julian.reschke@greenbytes.de)
+    Copyright (c) 2016-2019, Julian Reschke (julian.reschke@greenbytes.de)
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
@@ -51,7 +51,7 @@
 </xsl:param>
 <xsl:param name="steps">
   <!-- note that boilerplate currently needs to run first, so that the templates can access "/" -->
-  <xsl:text>pi xinclude rfc2629ext figextract artwork cleansvg listdefaultstyle listextract lists listextract lists listextract lists tables removeinrfc boilerplate deprecation defaults normalization slug derivedcontent pn scripts idcheck preptime</xsl:text>
+  <xsl:text>pi xinclude rfc2629ext figextract artset artwork references cleansvg listdefaultstyle listextract lists listextract lists listextract lists tables removeinrfc boilerplate deprecation defaults normalization slug derivedcontent pn scripts idcheck preprocesssvg sanitizesvg preptime</xsl:text>
   <xsl:if test="$mode='rfc'"> rfccleanup</xsl:if>
 </xsl:param>
 <xsl:variable name="rfcnumber" select="/rfc/@number"/>
@@ -74,6 +74,10 @@
       <xsl:choose>
         <xsl:when test="contains(concat(' ',$skip-steps,' '),concat(' ',$s,' '))">
           <xsl:copy-of select="$nodes"/>
+        </xsl:when>
+        <xsl:when test="$s='artset'"> 
+          <xsl:message>Step: artset</xsl:message>
+          <xsl:apply-templates select="$nodes" mode="prep-artset"/>
         </xsl:when>
         <xsl:when test="$s='artwork'"> 
           <xsl:message>Step: artwork</xsl:message>
@@ -131,9 +135,17 @@
           <xsl:message>Step: pn</xsl:message>
           <xsl:apply-templates select="$nodes" mode="prep-pn"/>
         </xsl:when>
+        <xsl:when test="$s='preprocesssvg'">
+          <xsl:message>Step: preprocesssvg</xsl:message>
+          <xsl:apply-templates select="$nodes" mode="prep-preprocesssvg"/>
+        </xsl:when>
         <xsl:when test="$s='preptime'">
           <xsl:message>Step: preptime</xsl:message>
           <xsl:apply-templates select="$nodes" mode="prep-preptime"/>
+        </xsl:when>
+        <xsl:when test="$s='references'">
+          <xsl:message>Step: references</xsl:message>
+          <xsl:apply-templates select="$nodes" mode="prep-references"/>
         </xsl:when>
         <xsl:when test="$s='removeinrfc'">
           <xsl:message>Step: removeinrfc</xsl:message>
@@ -146,6 +158,10 @@
         <xsl:when test="$s='rfccleanup'">
           <xsl:message>Step: rfccleanup</xsl:message>
           <xsl:apply-templates select="$nodes" mode="prep-rfccleanup"/>
+        </xsl:when>
+        <xsl:when test="$s='sanitizesvg'">
+          <xsl:message>Step: sanitizesvg</xsl:message>
+          <xsl:apply-templates select="$nodes" mode="prep-sanitizesvg"/>
         </xsl:when>
         <xsl:when test="$s='scripts'">
           <xsl:message>Step: scripts</xsl:message>
@@ -177,6 +193,49 @@
     </xsl:otherwise>
   </xsl:choose>
 </xsl:function>
+
+
+<!-- artset step -->
+
+<xsl:template match="node()|@*" mode="prep-artset">
+  <xsl:copy><xsl:apply-templates select="node()|@*" mode="prep-artset"/></xsl:copy>
+</xsl:template>
+
+<!-- anchor handling for artset -->
+<xsl:template match="artset/artwork/@anchor" mode="prep-artset"/>
+<xsl:template match="artset" mode="prep-artset">
+  <xsl:copy>
+    <xsl:apply-templates select="@*" mode="prep-artset"/>
+    <xsl:variable name="anchored-artwork" select="artwork[@anchor]"/>
+    <xsl:if test="not(@anchor) and $anchored-artwork">
+      <xsl:copy-of select="$anchored-artwork[1]/@anchor"/>
+    </xsl:if>
+    <xsl:apply-templates select="node()" mode="prep-artset"/>
+  </xsl:copy>
+</xsl:template>
+
+<!-- xref to artwork inside artset -->
+<xsl:template match="@target" mode="prep-artset">
+  <xsl:variable name="r" select="ancestor::rfc[1]"/>
+  <xsl:variable name="tn" select="$r//*[@anchor=current()]"/>
+  <!--<xsl:message>link to <xsl:value-of select="local-name($tn)"/></xsl:message>-->
+  <xsl:choose>
+    <xsl:when test="$tn/self::artwork and $tn/parent::artset and $tn/../@anchor">
+      <xsl:attribute name="target">
+        <xsl:value-of select="$tn/../@anchor"/>
+      </xsl:attribute>
+    </xsl:when>
+    <xsl:when test="$tn/self::artwork and $tn/parent::artset">
+      <xsl:attribute name="target">
+        <xsl:value-of select="$tn/../artwork[@anchor][1]/@anchor"/>
+      </xsl:attribute>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:copy-of select="."/>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
 
 <!-- artwork step -->
 
@@ -719,35 +778,33 @@
     <xsl:apply-templates select="@*" mode="prep-slug">
       <xsl:with-param name="root" select="$root"/>
     </xsl:apply-templates>
-    <xsl:if test="not(../@anchor)">
-      <xsl:variable name="fr">ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.'"()+-_ :%,/@=&lt;&gt;</xsl:variable>
-      <xsl:variable name="to">abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789.__----_---------</xsl:variable>
-      <xsl:variable name="canslug" select="translate(normalize-space(.),$fr,'')=''"/>
-      <xsl:choose>
-        <xsl:when test="$canslug">
-          <xsl:variable name="slug" select="translate(normalize-space(.),$fr,$to)"/>
-          <xsl:variable name="conflicts" select="$root//*[not(@anchor)]/name[$slug=translate(normalize-space(.),$fr,$to)]"/>
-          <xsl:attribute name="slugifiedName">
-            <xsl:choose>
-              <xsl:when test="count($conflicts)>1">
-                <xsl:variable name="c" select="preceding::*[not(@anchor)]/name[$slug=translate(normalize-space(.),$fr,$to)]"/>
-                <xsl:value-of select="concat('n-',$slug,'_',(1+count($c)))"/>
-                <!--<xsl:message><xsl:value-of select="concat('n-',$slug,'_',(1+count($c)))"/></xsl:message>-->
-              </xsl:when>
-              <xsl:otherwise>
-                <xsl:value-of select="concat('n-',$slug)"/>
-              </xsl:otherwise>
-            </xsl:choose>
-          </xsl:attribute>
-        </xsl:when>
-        <xsl:otherwise>
-          <xsl:call-template name="info">
-            <xsl:with-param name="msg" select="concat('No usable name for slug, using random ID instead: ',normalize-space(.))"/>
-          </xsl:call-template>
-          <xsl:attribute name="slugifiedName">n-id_<xsl:value-of select="generate-id(.)"/></xsl:attribute>
-        </xsl:otherwise>
-      </xsl:choose>
-    </xsl:if>
+    <xsl:variable name="fr">ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.'"()+-_ :%,/@=&lt;&gt;</xsl:variable>
+    <xsl:variable name="to">abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789.__----_---------</xsl:variable>
+    <xsl:variable name="canslug" select="translate(normalize-space(.),$fr,'')=''"/>
+    <xsl:choose>
+      <xsl:when test="$canslug">
+        <xsl:variable name="slug" select="translate(normalize-space(.),$fr,$to)"/>
+        <xsl:variable name="conflicts" select="$root//*[not(@anchor)]/name[$slug=translate(normalize-space(.),$fr,$to)]"/>
+        <xsl:attribute name="slugifiedName">
+          <xsl:choose>
+            <xsl:when test="count($conflicts)>1">
+              <xsl:variable name="c" select="preceding::*[not(@anchor)]/name[$slug=translate(normalize-space(.),$fr,$to)]"/>
+              <xsl:value-of select="concat('n-',$slug,'_',(1+count($c)))"/>
+              <!--<xsl:message><xsl:value-of select="concat('n-',$slug,'_',(1+count($c)))"/></xsl:message>-->
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:value-of select="concat('n-',$slug)"/>
+            </xsl:otherwise>
+          </xsl:choose>
+        </xsl:attribute>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:call-template name="info">
+          <xsl:with-param name="msg" select="concat('No usable name for slug, using random ID instead: ',normalize-space(.))"/>
+        </xsl:call-template>
+        <xsl:attribute name="slugifiedName">n-id_<xsl:value-of select="generate-id(.)"/></xsl:attribute>
+      </xsl:otherwise>
+    </xsl:choose>
     <xsl:apply-templates select="node()" mode="prep-slug">
       <xsl:with-param name="root" select="$root"/>
     </xsl:apply-templates>
@@ -916,6 +973,37 @@
   </xsl:choose>
 </xsl:function>
 
+<!-- utilities for CSS color values -->
+<xsl:function name="f:normalize-css-color">
+  <xsl:param name="cssc"/>
+  <xsl:choose>
+    <xsl:when test="starts-with($cssc,'#')">
+      <xsl:value-of select="translate($cssc,$lcase,$ucase)"/>
+    </xsl:when>
+    <xsl:otherwise><xsl:value-of select="$cssc"/></xsl:otherwise>
+  </xsl:choose>
+</xsl:function>
+
+<xsl:function name="f:compute-css-color-brightness">
+  <xsl:param name="cssc"/>
+  <xsl:choose>
+    <xsl:when test="starts-with($cssc,'#') and string-length($cssc)=7">
+      <xsl:variable name="r" select="f:parse-hex(substring($cssc,2,2))"/>
+      <xsl:variable name="g" select="f:parse-hex(substring($cssc,4,2))"/>
+      <xsl:variable name="b" select="f:parse-hex(substring($cssc,6,2))"/>
+      <xsl:value-of select="($r + $g + $b) div 3"/>
+    </xsl:when>
+    <xsl:when test="starts-with($cssc,'#') and string-length($cssc)=4">
+      <xsl:variable name="r" select="f:parse-hex(substring($cssc,2,1))"/>
+      <xsl:variable name="g" select="f:parse-hex(substring($cssc,3,1))"/>
+      <xsl:variable name="b" select="f:parse-hex(substring($cssc,4,1))"/>
+      <xsl:value-of select="(($r * 256) + ($g * 256) + ($b * 256)) div 3"/>
+    </xsl:when>
+    <xsl:otherwise>-1</xsl:otherwise>
+  </xsl:choose>
+</xsl:function>
+
+
 <!-- utilities for parsing hex numbers -->
 
 <xsl:function name="f:parse-hex">
@@ -1081,18 +1169,25 @@
     <xsl:when test="self::note">s-note-<xsl:number count="note"/></xsl:when>
     <xsl:when test="self::table">t-<xsl:number count="table" level="any"/></xsl:when>
     <xsl:when test="self::references">
-      <xsl:text>s-</xsl:text>
-      <xsl:value-of select="1 + count(../../middle/section)"/>
-      <xsl:if test="count(../references)!=1">
-        <xsl:text>.</xsl:text>
-        <xsl:value-of select="1 + count(preceding-sibling::references)"/>
-      </xsl:if>
+      <xsl:choose>
+        <xsl:when test="parent::references">
+          <xsl:for-each select=".."><xsl:call-template name="pn-sn"/></xsl:for-each>.<xsl:number count="references"/>
+        </xsl:when>
+        <xsl:otherwise>
+          <xsl:text>s-</xsl:text>
+          <xsl:value-of select="1 + count(../../middle/section)"/>
+          <xsl:if test="count(../references)!=1">
+            <xsl:text>.</xsl:text>
+            <xsl:value-of select="1 + count(preceding-sibling::references)"/>
+          </xsl:if>
+        </xsl:otherwise>
+      </xsl:choose>
     </xsl:when>
     <xsl:when test="self::section and parent::back">s-<xsl:number count="section" format="a"/></xsl:when>
     <xsl:when test="self::section and parent::middle">s-<xsl:number count="section"/></xsl:when>
     <xsl:when test="self::section and ancestor::boilerplate">s-boilerplate-<xsl:number count="section"/></xsl:when>
     <xsl:when test="self::section"><xsl:for-each select=".."><xsl:call-template name="pn-sn"/></xsl:for-each>.<xsl:number count="section"/></xsl:when>
-    <xsl:when test="self::artwork or self::aside or self::blockquote or self::dd or self::dl or self::dt or self::li or self::ol or self::sourcecode or self::t or self::tbody or self::td or self::th or self::thead or self::tr or self::ul">
+    <xsl:when test="self::artset or self::artwork or self::aside or self::blockquote or self::dd or self::dl or self::dt or self::li or self::ol or self::sourcecode or self::t or self::tbody or self::td or self::th or self::thead or self::tr or self::ul">
       <xsl:for-each select="..">
         <xsl:call-template name="pn-sn"/>
         <xsl:choose>
@@ -1100,13 +1195,13 @@
           <xsl:otherwise>.</xsl:otherwise>
         </xsl:choose>
       </xsl:for-each>
-      <xsl:number count="artwork|aside|blockquote|dd|dl|dt|li|ol|sourcecode|t|tbody|td|th|thead|tr|ul"/>
+      <xsl:number count="artset|artwork|aside|blockquote|dd|dl|dt|li|ol|sourcecode|t|tbody|td|th|thead|tr|ul"/>
     </xsl:when>
     <xsl:otherwise/>
   </xsl:choose>
 </xsl:template>
 
-<xsl:template match="abstract|artwork|aside|blockquote|boilerplate|dd|dl|dt|figure|li|note|ol|references|section|sourcecode|t|table|tbody|td|th|thead|tr|ul" mode="prep-pn">
+<xsl:template match="abstract|artset|artwork|aside|blockquote|boilerplate|dd|dl|dt|figure|li|note|ol|references|section|sourcecode|t|table|tbody|td|th|thead|tr|ul" mode="prep-pn">
   <xsl:copy>
     <xsl:apply-templates select="@*" mode="prep-pn"/>
     <!-- https://github.com/rfc-format/draft-iab-rfcv3-preptool-bis/issues/7 -->
@@ -1132,6 +1227,28 @@
     <xsl:apply-templates select="@*" mode="prep-preptime"/>
     <xsl:apply-templates select="node()" mode="prep-preptime"/>
   </xsl:copy>
+</xsl:template>
+
+<!-- references step -->
+
+<xsl:template match="node()|@*" mode="prep-references">
+  <xsl:copy><xsl:apply-templates select="node()|@*" mode="prep-references"/></xsl:copy>
+</xsl:template>
+
+<xsl:template match="references[parent::back]" mode="prep-references">
+  <xsl:choose>
+    <xsl:when test="not(preceding-sibling::references) and count(../references)!=1">
+      <references>
+        <name>References</name>
+        <xsl:copy-of select="."/>
+        <xsl:apply-templates select="following-sibling::references" mode="prep-references"/>
+      </references>
+    </xsl:when>
+    <xsl:when test="not(preceding-sibling::references) and count(../references)=1">
+      <xsl:copy-of select="."/>
+    </xsl:when>
+    <xsl:otherwise/>
+  </xsl:choose>
 </xsl:template>
 
 <!-- removeinrfc step -->
@@ -1168,7 +1285,7 @@
   </xsl:choose>
 </xsl:template>
 
-<!-- rrfc2629ext step -->
+<!-- rfc2629ext step -->
 
 <xsl:template match="node()|@*" mode="prep-rfc2629ext">
   <xsl:copy><xsl:apply-templates select="node()|@*" mode="prep-rfc2629ext"/></xsl:copy>
@@ -1184,6 +1301,16 @@
   </xsl:copy>
 </xsl:template>
 <xsl:template match="@x:quotes" mode="prep-rfc2629ext" xmlns:x="http://purl.org/net/xml2rfc/ext"/>
+
+<xsl:template match="x:source" mode="prep-rfc2629ext" xmlns:x="http://purl.org/net/xml2rfc/ext">
+  <xsl:if test="not(../front)">
+    <xsl:copy-of select="document(@href)/rfc/front"/>
+  </xsl:if>
+  <xsl:copy>
+    <xsl:apply-templates select="@*" mode="prep-rfc2629ext"/>
+    <xsl:apply-templates select="node()" mode="prep-rfc2629ext"/>
+  </xsl:copy>
+</xsl:template>
 
 <xsl:template match="x:link[not(@basename)]" mode="prep-rfc2629ext" xmlns:x="http://purl.org/net/xml2rfc/ext">
   <link>
@@ -1294,6 +1421,216 @@
       <xsl:apply-templates select="node()|@*" mode="prep-tables"/>
     </t>
   </xsl:for-each>
+</xsl:template>
+
+
+<!-- preprocesssvg step -->
+
+<xsl:template match="node()|@*" mode="prep-preprocesssvg">
+  <xsl:copy><xsl:apply-templates select="node()|@*" mode="prep-preprocesssvg"/></xsl:copy>
+</xsl:template>
+
+<xsl:template match="svg:*/@style" mode="prep-preprocesssvg" priority="9">
+  <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+  <xsl:analyze-string select="." regex='\s*([-A-Za-z]*)\s*(:)\s*([^;]*)\s*(;)?'>
+    <xsl:matching-substring>
+      <xsl:message>INFO: inserting <xsl:value-of select="regex-group(1)"/>=<xsl:value-of select="regex-group(3)"/> instead</xsl:message>
+      <xsl:attribute name="{regex-group(1)}"><xsl:value-of select="regex-group(3)"/></xsl:attribute>
+    </xsl:matching-substring>
+  </xsl:analyze-string>
+</xsl:template>
+
+<!-- sanitizesvg step, TBD: add to whitelist, check specific attribute values -->
+
+<xsl:template match="node()|@*" mode="prep-sanitizesvg">
+  <xsl:copy><xsl:apply-templates select="node()|@*" mode="prep-sanitizesvg"/></xsl:copy>
+</xsl:template>
+
+<xsl:template match="*[ancestor::svg:svg]" mode="prep-sanitizesvg">
+  <xsl:message>ERROR: <xsl:value-of select="node-name(.)"/> not allowed in SVG content (dropped)</xsl:message>
+</xsl:template>
+
+<xsl:template match="*[ancestor::svg:svg]/@*" mode="prep-sanitizesvg">
+  <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/> not allowed in SVG content (dropped)</xsl:message>
+</xsl:template>
+
+<xsl:template match="svg:a|svg:defs|svg:desc|svg:ellipse|svg:g|svg:line|svg:path|svg:polyline|svg:polygon|svg:rect|svg:style|svg:text|svg:title|svg:tspan|svg:use" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy><xsl:apply-templates select="node()|@*" mode="prep-sanitizesvg"/></xsl:copy>
+</xsl:template>
+
+<xsl:template match="svg:a/@xlink:href|svg:a/@xlink:title" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:defs/@class" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:ellipse/@cx|svg:ellipse/@cy|svg:ellipse/@rx|svg:ellipse/@ry" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:g/@class|svg:g/@id|svg:g/@transform" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:line/@class|svg:line/@fill-opacity|svg:line/@id|svg:line/@stroke-dasharray|svg:line/@stroke-width|svg:line/@style|svg:line/@x1|svg:line/@x2|svg:line/@y1|svg:line/@y2" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:path/@class|svg:path/@d|svg:path/@stroke-dasharray|svg:path/@stroke-width|svg:path/@style" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:polygon/@class|svg:polygon/@fill-opacity|svg:polygon/@points|svg:polygon/@stroke-width|svg:polygon/@style" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:polyline/@points" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:rect/@class|svg:rect/@fill-opacity|svg:rect/@height|svg:rect/@rx|svg:rect/@ry|svg:rect/@stroke-width|svg:rect/@width|svg:rect/@x|svg:rect/@y" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:text/@class|svg:text/@font-size|svg:text/@style|svg:text/@x|svg:text/@y" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:title/@content" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:tspan/@class|svg:tspan/@fill|svg:tspan/@font-size|svg:tspan/@x|svg:tspan/@y" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:use/@transform|svg:use/@x|svg:use/@y|svg:use/@xlink:href" mode="prep-sanitizesvg" priority="9">
+  <xsl:copy/>
+</xsl:template>
+
+<xsl:template match="svg:ellipse/@fill|svg:line/@fill|svg:path/@fill|svg:polygon/@fill|svg:rect/@fill|svg:text/@fill" mode="prep-sanitizesvg" priority="9">
+  <xsl:variable name="v" select="f:normalize-css-color(.)"/>
+  <xsl:variable name="brightness" select="f:compute-css-color-brightness($v)"/>
+
+  <xsl:choose>
+    <xsl:when test="$v='none' or $v='black' or $v='white' or $v='#000000' or $v='#FFFFFF'">
+      <xsl:copy/>
+    </xsl:when>
+    <xsl:when test="$brightness >= 128">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'white')</xsl:message>
+      <xsl:attribute name="fill">white</xsl:attribute>
+    </xsl:when>
+    <xsl:when test="$brightness >= 0 and $brightness &lt; 128">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'black')</xsl:message>
+      <xsl:attribute name="fill">black</xsl:attribute>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
+<xsl:template match="svg:ellipse/@stroke|svg:line/@stroke|svg:path/@stroke|svg:polygon/@stroke|svg:rect/@stroke|svg:tspan/@stroke" mode="prep-sanitizesvg" priority="9">
+  <xsl:variable name="v" select="f:normalize-css-color(.)"/>
+  <xsl:variable name="brightness" select="f:compute-css-color-brightness($v)"/>
+
+  <xsl:choose>
+    <xsl:when test="$v='none' or $v='currentColor' or $v='black' or $v='white' or $v='#000000' or $v='#FFFFFF'">
+      <xsl:copy/>
+    </xsl:when>
+    <xsl:when test="$brightness >= 128">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'white')</xsl:message>
+      <xsl:attribute name="stroke">white</xsl:attribute>
+    </xsl:when>
+    <xsl:when test="$brightness >= 0 and $brightness &lt; 128">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'black')</xsl:message>
+      <xsl:attribute name="stroke">black</xsl:attribute>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
+<xsl:template match="svg:text/@font-family|svg:tspan/@font-family" mode="prep-sanitizesvg" priority="9">
+  <xsl:choose>
+    <xsl:when test=".='serif' or .='sans-serif' or .='monospace'">
+      <xsl:copy/>
+    </xsl:when>
+    <xsl:when test=".='Times New Roman'">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'serif')</xsl:message>
+      <xsl:attribute name="font-family">serif</xsl:attribute>
+    </xsl:when>
+    <xsl:when test="contains(.,'monospace')">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'monospace')</xsl:message>
+      <xsl:attribute name="font-family">monospace</xsl:attribute>
+    </xsl:when>
+    <xsl:when test="contains(.,'sans-serif')">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'sans-serif')</xsl:message>
+      <xsl:attribute name="font-family">sans-serif</xsl:attribute>
+    </xsl:when>
+    <xsl:when test="contains(.,'serif')">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'serif')</xsl:message>
+      <xsl:attribute name="font-family">serif</xsl:attribute>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
+<xsl:template match="svg:text/@text-anchor" mode="prep-sanitizesvg" priority="9">
+  <xsl:choose>
+    <xsl:when test=".='start' or .='middle' or .='end' or .='inherit'">
+      <xsl:copy/>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
+<xsl:template match="svg:text/@font-style|svg:tspan/@font-style" mode="prep-sanitizesvg" priority="9">
+  <xsl:choose>
+    <xsl:when test=".='normal' or .='italic' or .='oblique'">
+      <xsl:copy/>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
+<xsl:template match="svg:text/@font-weight|svg:tspan/@font-weight" mode="prep-sanitizesvg" priority="9">
+  <xsl:choose>
+    <xsl:when test=".='normal' or .='bold' or .='bolder' or .='lighter'">
+      <xsl:copy/>
+    </xsl:when>
+    <xsl:when test=".='400'">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'normal')</xsl:message>
+      <xsl:attribute name="font-weight">normal</xsl:attribute>
+    </xsl:when>
+    <xsl:when test=".='700'">
+      <xsl:message>WARN: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (replaced by 'bold')</xsl:message>
+      <xsl:attribute name="font-weight">bold</xsl:attribute>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
+<xsl:template match="svg:path/@stroke-linejoin|svg:rect/@stroke-linejoin" mode="prep-sanitizesvg" priority="9">
+  <xsl:choose>
+    <xsl:when test=".='miter' or .='round' or .='bevel'">
+      <xsl:copy/>
+    </xsl:when>
+    <xsl:otherwise>
+      <xsl:message>ERROR: <xsl:value-of select="node-name(..)"/>/@<xsl:value-of select="node-name(.)"/>=<xsl:value-of select="."/> not allowed in SVG content (dropped)</xsl:message>
+    </xsl:otherwise>
+  </xsl:choose>
 </xsl:template>
 
 <!-- xinclude step -->
